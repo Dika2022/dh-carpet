@@ -38,7 +38,16 @@ Get-Content ..\.env | Where-Object { $_ -match '^[^#].+=' } | ForEach-Object { $
 alembic upgrade head
 ```
 
-Новые изменения схемы создаются только отдельными миграциями Alembic.
+Новые изменения схемы создаются только отдельными миграциями Alembic. Каталог ковров добавляется ревизией `20260814_0002`; базовая применённая ревизия `20260814_0001` не изменяется.
+
+## API каталога
+
+- `GET /api/rugs` — пагинация и фильтры `status`, `barcode`, `query`, `current_location`;
+- `GET /api/rugs/{id}` — подробная карточка;
+- `GET /api/rugs/by-barcode/{barcode}` — карточка по штрихкоду 1С;
+- `POST /api/internal/1c/rugs/upsert` — атомарный импорт одного полного snapshot от будущего агента 1С.
+
+Internal endpoint требует заголовок `X-Internal-API-Key`. Ключ читается из `INTERNAL_API_KEY` или, предпочтительно для production, из `INTERNAL_API_KEY_FILE`. Контракт и вымышленный пример запроса приведены в [`docs/1c-agent-contract.md`](docs/1c-agent-contract.md).
 
 ## Тесты
 
@@ -48,6 +57,15 @@ alembic upgrade head
 pytest
 ```
 
+Unit/API тесты, не требующие БД, запускаются обычным `pytest`. Интеграционные тесты работают только с отдельной PostgreSQL, на которой заранее выполнено `alembic upgrade head` до ревизии `20260814_0002`:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql+psycopg://<test-user>:<test-password>@127.0.0.1:5432/dhcarpet_test"
+pytest -m integration
+```
+
+SQLite намеренно не используется. `TEST_DATABASE_URL` запрещено направлять на production.
+
 ## Запуск через Docker
 
 Compose запускает только backend и подключает его к уже существующей external-сети `dh-backend`:
@@ -56,15 +74,18 @@ Compose запускает только backend и подключает его �
 Copy-Item .env.example .env
 New-Item -ItemType Directory -Force secrets
 $secretPath = Join-Path (Resolve-Path secrets) "postgres_password"
+$internalSecretPath = Join-Path (Resolve-Path secrets) "internal_api_key"
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($secretPath, "<локальный пароль>", $utf8NoBom)
+[System.IO.File]::WriteAllText($internalSecretPath, "<локальный internal key>", $utf8NoBom)
 $env:DH_CARPET_ENV_FILE = (Resolve-Path .env)
 $env:POSTGRES_PASSWORD_SECRET_FILE = $secretPath
+$env:INTERNAL_API_KEY_SECRET_FILE = $internalSecretPath
 docker compose -f deploy/compose.yaml build
 docker compose -f deploy/compose.yaml run --rm backend alembic upgrade head
 docker compose -f deploy/compose.yaml up -d backend
 ```
 
-Порт всегда публикуется только на `127.0.0.1:8000`. В production Compose по умолчанию использует `/srv/dh-carpet/infra/app.env` и Docker secret `/srv/dh-carpet/infra/secrets/postgres_password`; реальные секреты в env-файле, Compose и репозитории не хранятся.
+Порт всегда публикуется только на `127.0.0.1:8000`. В production Compose по умолчанию использует `/srv/dh-carpet/infra/app.env`, PostgreSQL secret `/srv/dh-carpet/infra/secrets/postgres_password` и internal API secret `/srv/dh-carpet/infra/secrets/internal_api_key`; реальные секреты в env-файле, Compose и репозитории не хранятся.
 
-Текущий этап содержит только фундамент backend, health-check и начальную схему данных. Интеграции с 1С, обработка медиа и распознавание ковров пока не реализованы.
+Текущий этап содержит каталог ковров и внутренний контракт приёма данных от будущего агента 1С. Прямого подключения к SQL-базе 1С, записи в 1С, обработки Instagram, AI и распознавания изображений нет.

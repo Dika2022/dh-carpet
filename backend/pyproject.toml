@@ -22,6 +22,7 @@ dependencies = [
 dev = [
     "httpx>=0.28,<1.0",
     "pytest>=8.3,<10.0",
+    "pytest-asyncio>=0.25,<2.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -29,4 +30,7 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
+asyncio_mode = "auto"
+markers = [
+    "integration: требует отдельную PostgreSQL с применёнными миграциями",
+]

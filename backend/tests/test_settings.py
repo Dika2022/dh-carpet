@@ -17,6 +17,7 @@ REQUIRED_ENVIRONMENT = {
     "REDIS_PORT": "6379",
     "QDRANT_HOST": "qdrant",
     "QDRANT_PORT": "6333",
+    "INTERNAL_API_KEY": "test-internal-key",
 }
 
 
@@ -57,3 +58,19 @@ def test_postgres_password_is_loaded_from_file(
 
     assert settings.database_url.password == "file-placeholder"
     assert "file-placeholder" not in repr(settings)
+
+
+def test_internal_api_key_is_loaded_from_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for name, value in REQUIRED_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+    secret_file = tmp_path / "internal_api_key"
+    secret_file.write_text("internal-file-placeholder\n", encoding="utf-8")
+    monkeypatch.setenv("INTERNAL_API_KEY_FILE", str(secret_file))
+
+    settings = Settings()  # type: ignore[call-arg]
+
+    assert settings.internal_api_key is not None
+    assert settings.internal_api_key.get_secret_value() == "internal-file-placeholder"
+    assert "internal-file-placeholder" not in repr(settings)

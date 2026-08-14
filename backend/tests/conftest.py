@@ -8,6 +8,7 @@ from app.core.config import get_settings
 @pytest.fixture(autouse=True)
 def application_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.delenv("POSTGRES_PASSWORD_FILE", raising=False)
+    monkeypatch.delenv("INTERNAL_API_KEY_FILE", raising=False)
     values = {
         "APP_ENV": "test",
         "SERVICE_CHECK_TIMEOUT_SECONDS": "1",
@@ -20,6 +21,7 @@ def application_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "REDIS_PORT": "6379",
         "QDRANT_HOST": "qdrant",
         "QDRANT_PORT": "6333",
+        "INTERNAL_API_KEY": "test-internal-key",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)

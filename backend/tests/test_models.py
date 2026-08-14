@@ -13,6 +13,7 @@ from app.models.enums import RugMediaLinkSource, RugStatus, VerificationStatus
 EXPECTED_TABLES = {
     "rugs",
     "rug_external_data",
+    "rug_photos",
     "media_items",
     "transcripts",
     "transcript_segments",
@@ -21,8 +22,9 @@ EXPECTED_TABLES = {
 }
 
 TIMEZONE_COLUMNS = {
-    "rugs": {"created_at", "updated_at"},
+    "rugs": {"source_updated_at", "created_at", "updated_at"},
     "rug_external_data": {"valid_from", "valid_to", "created_at"},
+    "rug_photos": {"created_at", "valid_from", "valid_to"},
     "media_items": {"published_at", "created_at"},
     "transcripts": {"created_at"},
     "rug_media_links": {"created_at"},
@@ -30,8 +32,23 @@ TIMEZONE_COLUMNS = {
 }
 
 EXPECTED_INDEXES = {
-    "rugs": {"ix_rugs_created_at"},
-    "rug_external_data": {"ix_rug_external_data_rug_id"},
+    "rugs": {
+        "ix_rugs_created_at",
+        "ix_rugs_status",
+        "ix_rugs_current_location",
+        "ix_rugs_article",
+    },
+    "rug_external_data": {
+        "ix_rug_external_data_rug_id",
+        "ix_rug_external_data_fingerprint",
+        "uq_rug_external_data_current",
+    },
+    "rug_photos": {
+        "ix_rug_photos_rug_current_sort",
+        "ix_rug_photos_source_external_id",
+        "ix_rug_photos_checksum",
+        "uq_rug_photos_current_fingerprint",
+    },
     "media_items": {"ix_media_items_published_at", "ix_media_items_created_at"},
     "transcripts": {"ix_transcripts_media_item_id"},
     "transcript_segments": {"ix_transcript_segments_transcript_id"},
@@ -110,6 +127,12 @@ def test_expected_check_constraints_exist() -> None:
         "ck_rug_media_links_start_seconds_nonnegative",
         "ck_rug_media_links_end_after_start",
         "ck_rug_media_links_confidence_range",
+        "ck_rugs_width_positive",
+        "ck_rugs_length_positive",
+        "ck_rugs_retail_price_nonnegative",
+        "ck_rugs_contractor_price_nonnegative",
+        "ck_rug_photos_sort_order_nonnegative",
+        "ck_rug_photos_valid_period",
     }
     actual_names = {
         constraint.name

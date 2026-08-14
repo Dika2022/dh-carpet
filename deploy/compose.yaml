@@ -11,17 +11,22 @@ services:
       - ${DH_CARPET_ENV_FILE:-/srv/dh-carpet/infra/app.env}
     environment:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      INTERNAL_API_KEY_FILE: /run/secrets/internal_api_key
     ports:
       - "127.0.0.1:8000:8000"
     secrets:
       - source: postgres_password
         target: postgres_password
+      - source: internal_api_key
+        target: internal_api_key
     networks:
       - dh-backend
 
 secrets:
   postgres_password:
     file: ${POSTGRES_PASSWORD_SECRET_FILE:-/srv/dh-carpet/infra/secrets/postgres_password}
+  internal_api_key:
+    file: ${INTERNAL_API_KEY_SECRET_FILE:-/srv/dh-carpet/infra/secrets/internal_api_key}
 
 networks:
   dh-backend:

@@ -7,7 +7,7 @@ from redis.asyncio import Redis
 
 from app.api.router import api_router
 from app.core.config import get_settings
-from app.db.session import create_database_engine
+from app.db.session import create_database_engine, create_session_factory
 from app.services.health import HealthService
 
 
@@ -15,6 +15,7 @@ from app.services.health import HealthService
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     engine = create_database_engine(settings)
+    session_factory = create_session_factory(engine)
     redis_client = Redis(
         host=settings.redis_host,
         port=settings.redis_port,
@@ -25,6 +26,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         port=settings.qdrant_port,
     )
 
+    app.state.settings = settings
+    app.state.session_factory = session_factory
     app.state.health_service = HealthService(
         engine=engine,
         redis_client=redis_client,

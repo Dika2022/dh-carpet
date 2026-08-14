@@ -4,6 +4,7 @@ from app.models.entities import (
     Rug,
     RugExternalData,
     RugMediaLink,
+    RugPhoto,
     Transcript,
     TranscriptSegment,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "RugExternalData",
     "RugMediaLink",
     "RugMediaLinkSource",
+    "RugPhoto",
     "RugStatus",
     "Transcript",
     "TranscriptSegment",
