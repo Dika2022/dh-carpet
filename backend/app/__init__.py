@@ -1,0 +1,2 @@
+"""Backend-приложение dh-carpet."""
+

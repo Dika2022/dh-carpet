@@ -1,0 +1,29 @@
+name: dh-carpet
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    image: dh-carpet-backend:local
+    restart: unless-stopped
+    env_file:
+      - ${DH_CARPET_ENV_FILE:-/srv/dh-carpet/infra/app.env}
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    ports:
+      - "127.0.0.1:8000:8000"
+    secrets:
+      - source: postgres_password
+        target: postgres_password
+    networks:
+      - dh-backend
+
+secrets:
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_SECRET_FILE:-/srv/dh-carpet/infra/secrets/postgres_password}
+
+networks:
+  dh-backend:
+    external: true
+    name: dh-backend
