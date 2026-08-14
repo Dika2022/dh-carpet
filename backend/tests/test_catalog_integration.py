@@ -178,6 +178,7 @@ async def test_identical_upsert_is_unchanged_and_changed_payload_adds_history(
         barcode=original.barcode,
         name="Обновлённый тестовый ковёр",
     )
+    changed_payload["source_updated_at"] = "2026-08-14T10:00:01+03:00"
     changed_payload["raw_payload"]["test_version"] = 2
     updated = await RugSyncService(db_session).upsert(
         RugImportRequest.model_validate(changed_payload)
@@ -253,6 +254,7 @@ async def test_replaced_photo_is_kept_as_history(db_session: AsyncSession) -> No
             "checksum": "sha256:test-photo-2",
         }
     ]
+    changed_payload["source_updated_at"] = "2026-08-14T10:00:01+03:00"
     changed_payload["raw_payload"]["test_version"] = 2
     await RugSyncService(db_session).upsert(
         RugImportRequest.model_validate(changed_payload)
