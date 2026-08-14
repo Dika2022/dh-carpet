@@ -88,4 +88,15 @@ docker compose -f deploy/compose.yaml up -d backend
 
 Порт всегда публикуется только на `127.0.0.1:8000`. В production Compose по умолчанию использует `/srv/dh-carpet/infra/app.env`, PostgreSQL secret `/srv/dh-carpet/infra/secrets/postgres_password` и internal API secret `/srv/dh-carpet/infra/secrets/internal_api_key`; реальные секреты в env-файле, Compose и репозитории не хранятся.
 
+## Production deployment
+
+После первоначальной настройки сервера последующие безопасные обновления запускаются из production-репозитория командой:
+
+```bash
+cd /srv/dh-carpet/app
+./scripts/deploy.sh
+```
+
+Скрипт требует чистое рабочее дерево и последовательно выполняет `git pull --ff-only`, сборку backend, полный набор тестов на отдельной временной PostgreSQL, проверенный `pg_dump`, Alembic migration, пересоздание только backend и строгую проверку `/api/health`. При первой ошибке выполнение прекращается; после проваленных тестов или backup миграция и restart не запускаются. Временная тестовая БД удаляется автоматически. По умолчанию backup сохраняется в `/srv/dh-carpet/backups/postgres`, а PostgreSQL ожидается в контейнере `infra-postgres-1`; пути и имена можно переопределить одноимёнными переменными окружения, перечисленными в начале скрипта.
+
 Текущий этап содержит каталог ковров и внутренний контракт приёма данных от будущего агента 1С. Прямого подключения к SQL-базе 1С, записи в 1С, обработки Instagram, AI и распознавания изображений нет.
