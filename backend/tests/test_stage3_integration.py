@@ -195,10 +195,11 @@ async def test_document_snapshot_closes_removed_lines_and_unposted_document(
         }],
     })
     assert (await BulkSyncService(stage3_session).import_all(changed)).failed_items == 0
-    events = list((await stage3_session.scalars(select(RugEvent).where(
-        RugEvent.rug_id == rug_id,
-        RugEvent.source_ref == common["source_ref"],
-    ))).all())
+    async with stage3_session.begin():
+        events = list((await stage3_session.scalars(select(RugEvent).where(
+            RugEvent.rug_id == rug_id,
+            RugEvent.source_ref == common["source_ref"],
+        ))).all())
     assert {item.source_line_key: item.is_visible for item in events} == {
         "line-1": True,
         "line-2": False,
@@ -214,8 +215,12 @@ async def test_document_snapshot_closes_removed_lines_and_unposted_document(
         }],
     })
     assert (await BulkSyncService(stage3_session).import_all(unposted)).failed_items == 0
-    await stage3_session.refresh(next(item for item in events if item.source_line_key == "line-1"))
-    assert not any(item.is_visible for item in events)
+    async with stage3_session.begin():
+        visibility = list((await stage3_session.scalars(select(RugEvent.is_visible).where(
+            RugEvent.rug_id == rug_id,
+            RugEvent.source_ref == common["source_ref"],
+        ))).all())
+    assert visibility == [False, False]
 
 
 async def test_bulk_sync_records_per_item_results(stage3_session: AsyncSession) -> None:
