@@ -83,13 +83,11 @@ def rug_payload(*, category: str = "rug", stock: str = "0", suffix: str | None =
     }
 
 
-async def create_rug(session: AsyncSession, **kwargs) -> tuple[Rug, dict]:
+async def create_rug(session: AsyncSession, **kwargs) -> tuple[uuid.UUID, dict]:
     payload = rug_payload(**kwargs)
     result = await RugSyncService(session).upsert(RugImportRequest.model_validate(payload))
-    rug = await session.get(Rug, result.rug_id)
-    assert rug is not None
     await session.rollback()
-    return rug, payload
+    return result.rug_id, payload
 
 
 async def add_media(session: AsyncSession, suffix: str) -> MediaItem:
@@ -117,21 +115,21 @@ async def test_import_categories_zero_stock_and_idempotency(stage3_session: Asyn
 
 
 async def test_location_snapshot_keeps_history(stage3_session: AsyncSession) -> None:
-    rug, payload = await create_rug(stage3_session, stock="2")
+    rug_id, payload = await create_rug(stage3_session, stock="2")
     payload["source_updated_at"] = "2026-08-15T10:01:00+03:00"
     payload["locations"] = [
         {"warehouse": "Основной", "cell": "A-1", "qty": "1"},
         {"warehouse": "Запасной", "cell": None, "qty": "1"},
     ]
     await RugSyncService(stage3_session).upsert(RugImportRequest.model_validate(payload))
-    locations = list((await stage3_session.scalars(select(RugLocation).where(RugLocation.rug_id == rug.id))).all())
+    locations = list((await stage3_session.scalars(select(RugLocation).where(RugLocation.rug_id == rug_id))).all())
     assert len(locations) == 3
     assert sum(item.is_current for item in locations) == 2
     assert all(item.valid_to is not None for item in locations if not item.is_current)
 
 
 async def test_retail_sales_returns_update_and_unpost(stage3_session: AsyncSession) -> None:
-    rug, payload = await create_rug(stage3_session)
+    rug_id, payload = await create_rug(stage3_session)
     barcode = payload["barcode"]
     retail = OneCEventImport(barcode=barcode, event_type="retail_price_change", event_at=datetime(2026, 1, 1, tzinfo=UTC), price="23000", source_ref="price-1", source_line_key="1")
     same = retail.model_copy(update={"source_ref": "price-2"})
@@ -153,7 +151,7 @@ async def test_retail_sales_returns_update_and_unpost(stage3_session: AsyncSessi
     await OneCEventSyncService(stage3_session).upsert(return1)
     await OneCEventSyncService(stage3_session).upsert(return2)
     await OneCEventSyncService(stage3_session).upsert(return2.model_copy(update={"posted": False}))
-    events = list((await stage3_session.scalars(select(RugEvent).where(RugEvent.rug_id == rug.id))).all())
+    events = list((await stage3_session.scalars(select(RugEvent).where(RugEvent.rug_id == rug_id))).all())
     assert len([item for item in events if item.event_type == "retail_price_change"]) == 2
     assert len([item for item in events if item.event_type == "sale"]) == 2
     assert len([item for item in events if item.event_type == "customer_return"]) == 2
@@ -168,7 +166,7 @@ async def test_bulk_sync_records_per_item_results(stage3_session: AsyncSession) 
 
 
 async def test_lalita_discount_lifecycle_and_durations(stage3_session: AsyncSession) -> None:
-    rug, payload = await create_rug(stage3_session)
+    rug_id, payload = await create_rug(stage3_session)
     await OneCEventSyncService(stage3_session).upsert(OneCEventImport(
         barcode=payload["barcode"], event_type="retail_price_change",
         event_at=datetime(2026, 1, 1, tzinfo=UTC), price="10000",
@@ -178,7 +176,7 @@ async def test_lalita_discount_lifecycle_and_durations(stage3_session: AsyncSess
     media2 = await add_media(stage3_session, uuid.uuid4().hex)
     service = LalitaEventService(stage3_session)
     request = LalitaEventCreate(
-        rug_id=rug.id, event_at=datetime(2026, 2, 1, tzinfo=UTC), media_item_id=media1.id,
+        rug_id=rug_id, event_at=datetime(2026, 2, 1, tzinfo=UTC), media_item_id=media1.id,
         discount_type="percent", discount_value="20", duration_expression="на 2–3 дня",
     )
     outcome, first = await service.create(request)
@@ -187,7 +185,7 @@ async def test_lalita_discount_lifecycle_and_durations(stage3_session: AsyncSess
     assert first.calculated_price == Decimal("8000.00")
     assert first.valid_until == request.event_at + timedelta(days=3)
     _, second = await service.create(LalitaEventCreate(
-        rug_id=rug.id, event_at=datetime(2026, 2, 2, tzinfo=UTC), media_item_id=media2.id,
+        rug_id=rug_id, event_at=datetime(2026, 2, 2, tzinfo=UTC), media_item_id=media2.id,
         discount_type="absolute", discount_value="1500", duration_expression="на несколько дней",
     ))
     assert first.status == "replaced" and second.calculated_price == Decimal("8500.00")
@@ -199,10 +197,10 @@ async def test_lalita_discount_lifecycle_and_durations(stage3_session: AsyncSess
 
 
 async def test_lalita_unknown_retail_and_up_to_percent(stage3_session: AsyncSession) -> None:
-    rug, _ = await create_rug(stage3_session)
+    rug_id, _ = await create_rug(stage3_session)
     media = await add_media(stage3_session, uuid.uuid4().hex)
     _, event = await LalitaEventService(stage3_session).create(LalitaEventCreate(
-        rug_id=rug.id, event_at=datetime.now(UTC), media_item_id=media.id,
+        rug_id=rug_id, event_at=datetime.now(UTC), media_item_id=media.id,
         discount_type="up_to_percent", discount_value="20",
     ))
     assert event.retail_price_at_event is None and event.calculated_price is None
@@ -210,7 +208,7 @@ async def test_lalita_unknown_retail_and_up_to_percent(stage3_session: AsyncSess
 
 
 async def test_history_graph_recent_and_api_permission(stage3_session: AsyncSession, stage3_client: httpx.AsyncClient) -> None:
-    rug, payload = await create_rug(stage3_session)
+    rug_id, payload = await create_rug(stage3_session)
     for index in range(25):
         await OneCEventSyncService(stage3_session).upsert(OneCEventImport(
             barcode=payload["barcode"], event_type="sale",
@@ -218,17 +216,17 @@ async def test_history_graph_recent_and_api_permission(stage3_session: AsyncSess
             price=str(10000 + index), qty="1", source_ref=f"sale-{index}", source_line_key="1",
         ))
     recent = await TimelineService(stage3_session).history(
-        rug.id, date_from=None, date_to=None, event_types=None, statuses=None,
+        rug_id, date_from=None, date_to=None, event_types=None, statuses=None,
         page=1, page_size=20, recent=True,
     )
     assert len(recent.items) == 20
     graph = await TimelineService(stage3_session).graph(
-        rug.id, datetime(2025, 8, 1, tzinfo=UTC), datetime(2026, 8, 1, tzinfo=UTC)
+        rug_id, datetime(2025, 8, 1, tzinfo=UTC), datetime(2026, 8, 1, tzinfo=UTC)
     )
     assert [series.id for series in graph.series] == ["retail_price", "lalita_price", "sale_price"]
     assert len(graph.series[2].points) == 25
-    denied = await stage3_client.get(f"/api/rugs/{rug.id}/history")
-    allowed = await stage3_client.get(f"/api/rugs/{rug.id}/history", headers={"X-Internal-API-Key": "test-internal-key"})
+    denied = await stage3_client.get(f"/api/rugs/{rug_id}/history")
+    allowed = await stage3_client.get(f"/api/rugs/{rug_id}/history", headers={"X-Internal-API-Key": "test-internal-key"})
     assert denied.status_code == 401 and allowed.status_code == 200
 
 
@@ -240,7 +238,7 @@ def test_archive_filename_parser_is_exact() -> None:
 
 
 async def test_archive_scan_deduplicates_and_unavailable_mount_keeps_index(stage3_session: AsyncSession, tmp_path: Path) -> None:
-    rug, payload = await create_rug(stage3_session)
+    rug_id, payload = await create_rug(stage3_session)
     root = tmp_path / "archive"
     (root / "nested").mkdir(parents=True)
     first = root / f"{payload['article']}.png"
@@ -253,6 +251,6 @@ async def test_archive_scan_deduplicates_and_unavailable_mount_keeps_index(stage
     assert repeated.created == 0 and repeated.unchanged == 1
     with pytest.raises(FileNotFoundError):
         await PhotoArchiveScanner(stage3_session).scan(tmp_path / "missing")
-    records = list((await stage3_session.scalars(select(ExternalPhotoFile).where(ExternalPhotoFile.rug_id == rug.id))).all())
+    records = list((await stage3_session.scalars(select(ExternalPhotoFile).where(ExternalPhotoFile.rug_id == rug_id))).all())
     assert len(records) == 1 and records[0].is_current
     assert records[0].width == 12 and records[0].height == 8
