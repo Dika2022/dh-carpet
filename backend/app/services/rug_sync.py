@@ -3,9 +3,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entities import AuditEvent, Rug, RugExternalData, RugPhoto
+from app.models.entities import AuditEvent, Rug, RugExternalData, RugLocation, RugPhoto
 from app.repositories.rugs import (
     AuditRepository,
     RugHistoryRepository,
@@ -29,6 +30,13 @@ RUG_MUTABLE_FIELDS = (
     "contractor_price",
     "currency",
     "source_updated_at",
+    "category",
+    "description",
+    "weight_kg",
+    "stock_qty",
+    "stock_unit",
+    "retail_price_unit",
+    "attributes",
 )
 
 
@@ -67,7 +75,10 @@ class RugSyncService:
 
     async def upsert(self, request: RugImportRequest) -> RugSyncResult:
         normalized_photos = self._deduplicate_photos(request.photos)
-        version_payload = self._build_version_payload(request, normalized_photos)
+        normalized_locations = self._deduplicate_locations(request.locations)
+        version_payload = self._build_version_payload(
+            request, normalized_photos, normalized_locations
+        )
         fingerprint = payload_fingerprint(version_payload)
         observed_at = datetime.now(UTC)
 
@@ -81,6 +92,7 @@ class RugSyncService:
                     self._new_history(rug.id, version_payload, fingerprint, observed_at)
                 )
                 await self._sync_photos(rug.id, normalized_photos, observed_at)
+                await self._sync_locations(rug.id, normalized_locations, observed_at)
                 self.audit.add(
                     self._audit_event(
                         rug.id,
@@ -117,6 +129,7 @@ class RugSyncService:
                 self._new_history(rug.id, version_payload, fingerprint, observed_at)
             )
             await self._sync_photos(rug.id, normalized_photos, observed_at)
+            await self._sync_locations(rug.id, normalized_locations, observed_at)
             self.audit.add(
                 self._audit_event(
                     rug.id,
@@ -165,6 +178,7 @@ class RugSyncService:
     def _new_rug(request: RugImportRequest) -> Rug:
         values = {field: getattr(request, field) for field in RUG_MUTABLE_FIELDS}
         values["status"] = request.status.value
+        values["category"] = request.category.value
         return Rug(barcode=request.barcode, **values)
 
     @staticmethod
@@ -173,6 +187,8 @@ class RugSyncService:
             value = getattr(request, field)
             if field == "status":
                 value = request.status.value
+            elif field == "category":
+                value = request.category.value
             setattr(rug, field, value)
 
     @staticmethod
@@ -242,18 +258,65 @@ class RugSyncService:
         )
 
     @staticmethod
+    def _deduplicate_locations(locations: list) -> list[tuple[object, str]]:
+        unique: dict[str, object] = {}
+        for location in locations:
+            fingerprint = payload_fingerprint(location.model_dump(mode="json"))
+            unique[fingerprint] = location
+        return [(location, fingerprint) for fingerprint, location in sorted(unique.items())]
+
+    async def _sync_locations(
+        self,
+        rug_id: uuid.UUID,
+        incoming_locations: list[tuple[object, str]],
+        observed_at: datetime,
+    ) -> None:
+        existing = list(
+            (
+                await self.session.scalars(
+                    select(RugLocation)
+                    .where(RugLocation.rug_id == rug_id, RugLocation.is_current.is_(True))
+                    .with_for_update()
+                )
+            ).all()
+        )
+        existing_by_fingerprint = {item.fingerprint: item for item in existing}
+        incoming_fingerprints = {fingerprint for _, fingerprint in incoming_locations}
+        for location in existing:
+            if location.fingerprint not in incoming_fingerprints:
+                location.is_current = False
+                location.valid_to = observed_at
+        for incoming, fingerprint in incoming_locations:
+            if fingerprint in existing_by_fingerprint:
+                continue
+            self.session.add(
+                RugLocation(
+                    rug_id=rug_id,
+                    warehouse=incoming.warehouse,
+                    cell=incoming.cell,
+                    qty=incoming.qty,
+                    is_current=True,
+                    valid_from=observed_at,
+                    fingerprint=fingerprint,
+                )
+            )
+
+    @staticmethod
     def _build_version_payload(
         request: RugImportRequest,
         photos: list[tuple[RugPhotoImport, str]],
+        locations: list[tuple[object, str]],
     ) -> dict:
         rug_data = request.model_dump(
-            mode="json", exclude={"photos", "raw_payload"}, by_alias=False
+            mode="json", exclude={"photos", "locations", "raw_payload"}, by_alias=False
         )
         photo_data = [photo.model_dump(mode="json") for photo, _ in photos]
+        location_data = [location.model_dump(mode="json") for location, _ in locations]
         return to_jsonable(
             {
                 "rug": rug_data,
                 "photos": photo_data,
+                "locations": location_data,
                 "raw_payload": request.raw_payload,
             }
         )

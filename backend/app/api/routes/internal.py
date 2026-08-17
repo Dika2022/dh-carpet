@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_session
 from app.api.security import require_internal_api_key
 from app.schemas.rugs import RugImportRequest, RugUpsertResponse
+from app.schemas.stage3 import OneCBulkImportRequest, SyncRunResponse
+from app.services.stage3 import BulkSyncService
 from app.services.rug_sync import RugSyncConflictError, RugSyncService
 
 router = APIRouter(
@@ -32,3 +34,11 @@ async def upsert_rug(
         rug_id=result.rug_id,
         barcode=result.barcode,
     )
+
+
+@router.post("/bulk", response_model=SyncRunResponse)
+async def bulk_import(
+    payload: OneCBulkImportRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> SyncRunResponse:
+    return await BulkSyncService(session).import_all(payload)

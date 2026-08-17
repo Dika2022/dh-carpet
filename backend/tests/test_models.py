@@ -19,6 +19,11 @@ EXPECTED_TABLES = {
     "transcript_segments",
     "rug_media_links",
     "audit_events",
+    "rug_locations",
+    "rug_events",
+    "sync_runs",
+    "sync_items",
+    "external_photo_files",
 }
 
 TIMEZONE_COLUMNS = {
@@ -29,6 +34,11 @@ TIMEZONE_COLUMNS = {
     "transcripts": {"created_at"},
     "rug_media_links": {"created_at"},
     "audit_events": {"created_at"},
+    "rug_locations": {"valid_from", "valid_to", "created_at"},
+    "rug_events": {"event_at", "valid_until", "created_at", "updated_at"},
+    "sync_runs": {"started_at", "finished_at"},
+    "sync_items": {"created_at"},
+    "external_photo_files": {"first_seen_at", "last_seen_at", "missing_since"},
 }
 
 EXPECTED_INDEXES = {
@@ -37,6 +47,8 @@ EXPECTED_INDEXES = {
         "ix_rugs_status",
         "ix_rugs_current_location",
         "ix_rugs_article",
+        "ix_rugs_category",
+        "uq_rugs_article_not_null",
     },
     "rug_external_data": {
         "ix_rug_external_data_rug_id",
@@ -58,6 +70,26 @@ EXPECTED_INDEXES = {
         "ix_rug_media_links_verification_created_at",
     },
     "audit_events": {"ix_audit_events_entity", "ix_audit_events_created_at"},
+    "rug_locations": {
+        "ix_rug_locations_rug_current",
+        "ix_rug_locations_warehouse_cell",
+        "uq_rug_locations_current_fingerprint",
+    },
+    "rug_events": {
+        "ix_rug_events_rug_event_at",
+        "ix_rug_events_type_status",
+        "ix_rug_events_media_item_id",
+        "ix_rug_events_source_ref",
+        "uq_rug_events_source_line",
+    },
+    "sync_runs": {"ix_sync_runs_source_started"},
+    "sync_items": {"ix_sync_items_run_status"},
+    "external_photo_files": {
+        "ix_external_photo_files_rug_current",
+        "ix_external_photo_files_checksum",
+        "ix_external_photo_files_article",
+        "uq_external_photo_files_current_path",
+    },
 }
 
 
@@ -133,6 +165,18 @@ def test_expected_check_constraints_exist() -> None:
         "ck_rugs_contractor_price_nonnegative",
         "ck_rug_photos_sort_order_nonnegative",
         "ck_rug_photos_valid_period",
+        "ck_rugs_weight_nonnegative",
+        "ck_rugs_stock_nonnegative",
+        "ck_rug_locations_qty_nonnegative",
+        "ck_rug_locations_valid_period",
+        "ck_rug_events_price_nonnegative",
+        "ck_rug_events_old_price_nonnegative",
+        "ck_rug_events_qty_nonnegative",
+        "ck_rug_events_discount_nonnegative",
+        "ck_rug_events_retail_at_event_nonnegative",
+        "ck_rug_events_calculated_nonnegative",
+        "ck_rug_events_start_nonnegative",
+        "ck_rug_events_end_after_start",
     }
     actual_names = {
         constraint.name

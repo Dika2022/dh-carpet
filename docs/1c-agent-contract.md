@@ -49,7 +49,6 @@ Snapshot канонизируется, после чего вычисляетс�
   "length_cm": "230.25",
   "current_location": "Демонстрационный склад",
   "retail_price": "125000.00",
-  "contractor_price": "110000.00",
   "currency": "RUB",
   "source_updated_at": "2026-08-14T12:30:00+03:00",
   "photos": [

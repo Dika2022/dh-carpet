@@ -7,8 +7,21 @@ from app.models.entities import (
     RugPhoto,
     Transcript,
     TranscriptSegment,
+    RugLocation,
+    RugEvent,
+    SyncRun,
+    SyncItem,
+    ExternalPhotoFile,
 )
-from app.models.enums import RugMediaLinkSource, RugStatus, VerificationStatus
+from app.models.enums import (
+    DiscountType,
+    RugCategory,
+    RugEventStatus,
+    RugEventType,
+    RugMediaLinkSource,
+    RugStatus,
+    VerificationStatus,
+)
 
 __all__ = [
     "AuditEvent",
@@ -22,4 +35,13 @@ __all__ = [
     "Transcript",
     "TranscriptSegment",
     "VerificationStatus",
+    "RugLocation",
+    "RugEvent",
+    "SyncRun",
+    "SyncItem",
+    "ExternalPhotoFile",
+    "DiscountType",
+    "RugCategory",
+    "RugEventStatus",
+    "RugEventType",
 ]

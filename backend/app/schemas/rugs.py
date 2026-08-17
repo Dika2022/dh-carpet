@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.models.enums import RugStatus
+from app.models.enums import RugCategory, RugStatus
 
 PositiveDimension = Annotated[Decimal, Field(gt=0, max_digits=10, decimal_places=2)]
 NonNegativeMoney = Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=2)]
@@ -36,6 +36,13 @@ class RugFields(BaseModel):
     contractor_price: NonNegativeMoney | None = None
     currency: str = Field(default="RUB", min_length=3, max_length=3)
     source_updated_at: datetime | None = None
+    category: RugCategory = RugCategory.RUG
+    description: str | None = None
+    weight_kg: Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=3)] | None = None
+    stock_qty: Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=3)] = Decimal("0")
+    stock_unit: str | None = Field(default=None, max_length=50)
+    retail_price_unit: str | None = Field(default=None, max_length=50)
+    attributes: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("barcode", "name")
     @classmethod
@@ -45,7 +52,15 @@ class RugFields(BaseModel):
             raise ValueError("Значение не должно быть пустым")
         return value
 
-    @field_validator("article", "country", "composition", "current_location")
+    @field_validator(
+        "article",
+        "country",
+        "composition",
+        "current_location",
+        "description",
+        "stock_unit",
+        "retail_price_unit",
+    )
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -75,6 +90,7 @@ class RugPhotoImport(BaseModel):
     original_url: str | None = None
     sort_order: int = Field(default=0, ge=0)
     checksum: str | None = Field(default=None, max_length=128)
+    format: Literal["jpg", "jpeg", "png", "webp", "heic"] | None = None
 
     @model_validator(mode="after")
     def require_stable_photo_data(self) -> "RugPhotoImport":
@@ -84,12 +100,49 @@ class RugPhotoImport(BaseModel):
             raise ValueError(
                 "Фотография должна иметь external_id, путь, URL или checksum"
             )
+        candidates = [self.local_path, self.original_url, self.external_id]
+        detected = next(
+            (
+                value.rsplit(".", 1)[-1].lower().split("?", 1)[0]
+                for value in candidates
+                if value and "." in value
+            ),
+            None,
+        )
+        if self.format is None and detected not in {"jpg", "jpeg", "png", "webp", "heic"}:
+            raise ValueError("Для фотографии требуется подтверждённый формат изображения")
         return self
+
+
+class RugLocationImport(BaseModel):
+    warehouse: str = Field(min_length=1, max_length=255)
+    cell: str | None = Field(default=None, max_length=255)
+    qty: Annotated[Decimal, Field(ge=0, max_digits=14, decimal_places=3)]
+
+    @field_validator("warehouse")
+    @classmethod
+    def normalize_warehouse(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Склад не должен быть пустым")
+        return normalized
+
+    @field_validator("cell")
+    @classmethod
+    def normalize_cell(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
 
 
 class RugImportRequest(RugFields):
     photos: list[RugPhotoImport] = Field(default_factory=list)
+    locations: list[RugLocationImport] = Field(default_factory=list)
     raw_payload: dict[str, Any]
+
+    @model_validator(mode="after")
+    def only_retail_price_is_accepted_from_one_c(self) -> "RugImportRequest":
+        if self.contractor_price is not None:
+            raise ValueError("Интеграция 1С принимает только розничную цену")
+        return self
 
 
 class RugPhotoRead(BaseModel):

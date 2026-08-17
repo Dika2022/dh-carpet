@@ -41,7 +41,6 @@ def sample_payload(
         "length_cm": "230.25",
         "current_location": "Тестовый склад",
         "retail_price": "125000.00",
-        "contractor_price": "110000.00",
         "currency": "RUB",
         "source_updated_at": "2026-08-14T10:00:00+03:00",
         "photos": [
@@ -75,9 +74,9 @@ async def db_session() -> AsyncIterator[AsyncSession]:
     outer_transaction = await connection.begin()
     try:
         revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        if revision != "20260814_0002":
+        if revision != "20260814_0003":
             pytest.fail(
-                "На тестовой PostgreSQL должна быть применена migration 20260814_0002"
+                "На тестовой PostgreSQL должна быть применена migration 20260814_0003"
             )
         session = AsyncSession(
             bind=connection,
