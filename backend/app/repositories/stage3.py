@@ -33,6 +33,15 @@ class EventRepository:
             select(RugEvent).where(*filters).order_by(RugEvent.event_at.desc(), RugEvent.id.desc()).limit(1)
         )
 
+    async def by_document(self, source: str, event_type: str, source_ref: str) -> list[RugEvent]:
+        return list((await self.session.scalars(
+            select(RugEvent).where(
+                RugEvent.source == source,
+                RugEvent.event_type == event_type,
+                RugEvent.source_ref == source_ref,
+            ).with_for_update()
+        )).all())
+
     async def list_history(
         self,
         rug_id: uuid.UUID,

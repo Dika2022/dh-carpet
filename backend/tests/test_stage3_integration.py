@@ -158,6 +158,66 @@ async def test_retail_sales_returns_update_and_unpost(stage3_session: AsyncSessi
     assert sum(item.is_visible for item in events if item.event_type in {"sale", "customer_return"}) == 2
 
 
+async def test_document_snapshot_closes_removed_lines_and_unposted_document(
+    stage3_session: AsyncSession,
+) -> None:
+    rug_id, payload = await create_rug(stage3_session)
+    common = {
+        "barcode": payload["barcode"],
+        "event_type": "sale",
+        "event_at": "2026-08-17T12:00:00+03:00",
+        "price": "1000",
+        "qty": "1",
+        "source_ref": "11111111-1111-4111-8111-111111111111",
+    }
+    first = {**common, "source_line_key": "line-1"}
+    second = {**common, "source_line_key": "line-2"}
+    initial = OneCBulkImportRequest.model_validate({
+        "mode": "incremental",
+        "events": [first, second],
+        "document_snapshots": [{
+            "event_type": "sale",
+            "source_ref": common["source_ref"],
+            "posted": True,
+            "line_keys": ["line-1", "line-2"],
+        }],
+    })
+    assert (await BulkSyncService(stage3_session).import_all(initial)).failed_items == 0
+
+    changed = OneCBulkImportRequest.model_validate({
+        "mode": "incremental",
+        "events": [{**first, "price": "1100"}],
+        "document_snapshots": [{
+            "event_type": "sale",
+            "source_ref": common["source_ref"],
+            "posted": True,
+            "line_keys": ["line-1"],
+        }],
+    })
+    assert (await BulkSyncService(stage3_session).import_all(changed)).failed_items == 0
+    events = list((await stage3_session.scalars(select(RugEvent).where(
+        RugEvent.rug_id == rug_id,
+        RugEvent.source_ref == common["source_ref"],
+    ))).all())
+    assert {item.source_line_key: item.is_visible for item in events} == {
+        "line-1": True,
+        "line-2": False,
+    }
+
+    unposted = OneCBulkImportRequest.model_validate({
+        "mode": "incremental",
+        "document_snapshots": [{
+            "event_type": "sale",
+            "source_ref": common["source_ref"],
+            "posted": False,
+            "line_keys": [],
+        }],
+    })
+    assert (await BulkSyncService(stage3_session).import_all(unposted)).failed_items == 0
+    await stage3_session.refresh(next(item for item in events if item.source_line_key == "line-1"))
+    assert not any(item.is_visible for item in events)
+
+
 async def test_bulk_sync_records_per_item_results(stage3_session: AsyncSession) -> None:
     payloads = [rug_payload(category=value) for value in ("rug", "carpet", "hide")]
     request = OneCBulkImportRequest(mode="initial", rugs=[RugImportRequest.model_validate(item) for item in payloads])

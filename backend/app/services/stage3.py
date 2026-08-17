@@ -18,6 +18,7 @@ from app.schemas.stage3 import (
     LalitaEventConfirm,
     LalitaEventCreate,
     OneCBulkImportRequest,
+    OneCDocumentSnapshot,
     OneCEventImport,
     RugEventRead,
     RugLocationRead,
@@ -103,12 +104,37 @@ class OneCEventSyncService:
         event.fingerprint = fingerprint
 
 
+class OneCDocumentSnapshotService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.events = EventRepository(session)
+
+    async def reconcile(self, request: OneCDocumentSnapshot) -> str:
+        active_keys = set(request.line_keys) if request.posted else set()
+        changed = False
+        async with self.session.begin():
+            existing = await self.events.by_document(
+                "1c", request.event_type, request.source_ref
+            )
+            for event in existing:
+                should_be_visible = event.source_line_key in active_keys
+                if event.is_visible != should_be_visible:
+                    event.is_visible = should_be_visible
+                    changed = True
+        return "updated" if changed else "unchanged"
+
+
 class BulkSyncService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
     async def import_all(self, request: OneCBulkImportRequest) -> SyncRunResponse:
-        run = SyncRun(source="1c", mode=request.mode, status="running", total_items=len(request.rugs) + len(request.events))
+        run = SyncRun(
+            source="1c",
+            mode=request.mode,
+            status="running",
+            total_items=len(request.rugs) + len(request.events) + len(request.document_snapshots),
+        )
         async with self.session.begin():
             self.session.add(run)
             await self.session.flush()
@@ -125,6 +151,7 @@ class BulkSyncService:
             await self._save_item(run.id, item)
             results.append(item)
 
+        event_results: list[tuple[OneCEventImport, SyncItemResult]] = []
         for event in sorted(request.events, key=lambda item: item.event_at):
             key = f"{event.event_type}:{event.source_ref}:{event.source_line_key}"
             try:
@@ -132,6 +159,40 @@ class BulkSyncService:
                 item = SyncItemResult(entity_type=event.event_type, source_key=key, status="succeeded", result=outcome)
             except Exception as error:
                 item = SyncItemResult(entity_type=event.event_type, source_key=key, status="failed", error_code=type(error).__name__)
+            await self._save_item(run.id, item)
+            results.append(item)
+            event_results.append((event, item))
+
+        failed_documents = {
+            (event.event_type, event.source_ref)
+            for event, result in event_results
+            if result.status == "failed"
+        }
+        for snapshot in request.document_snapshots:
+            key = f"{snapshot.event_type}:{snapshot.source_ref}"
+            if (snapshot.event_type, snapshot.source_ref) in failed_documents:
+                item = SyncItemResult(
+                    entity_type=f"{snapshot.event_type}_snapshot",
+                    source_key=key,
+                    status="failed",
+                    error_code="document_event_failed",
+                )
+            else:
+                try:
+                    outcome = await OneCDocumentSnapshotService(self.session).reconcile(snapshot)
+                    item = SyncItemResult(
+                        entity_type=f"{snapshot.event_type}_snapshot",
+                        source_key=key,
+                        status="succeeded",
+                        result=outcome,
+                    )
+                except Exception as error:
+                    item = SyncItemResult(
+                        entity_type=f"{snapshot.event_type}_snapshot",
+                        source_key=key,
+                        status="failed",
+                        error_code=type(error).__name__,
+                    )
             await self._save_item(run.id, item)
             results.append(item)
 

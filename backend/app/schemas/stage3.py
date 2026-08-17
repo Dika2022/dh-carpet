@@ -45,10 +45,61 @@ class OneCEventImport(BaseModel):
         return self
 
 
+class OneCDocumentSnapshot(BaseModel):
+    event_type: Literal["sale", "customer_return"]
+    source_ref: str = Field(min_length=1, max_length=255)
+    posted: bool
+    line_keys: list[str] = Field(default_factory=list, max_length=5000)
+
+    @field_validator("line_keys")
+    @classmethod
+    def unique_nonempty_line_keys(cls, value: list[str]) -> list[str]:
+        if any(not item.strip() for item in value):
+            raise ValueError("line_keys не должны быть пустыми")
+        if len(value) != len(set(value)):
+            raise ValueError("line_keys должны быть уникальными")
+        return value
+
+    @model_validator(mode="after")
+    def unposted_snapshot_has_no_lines(self) -> "OneCDocumentSnapshot":
+        if not self.posted and self.line_keys:
+            raise ValueError("У распроведённого документа line_keys должен быть пустым")
+        return self
+
+
 class OneCBulkImportRequest(BaseModel):
     mode: Literal["initial", "incremental"]
     rugs: list[RugImportRequest] = Field(default_factory=list, max_length=1000)
     events: list[OneCEventImport] = Field(default_factory=list, max_length=5000)
+    document_snapshots: list[OneCDocumentSnapshot] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_document_snapshots(self) -> "OneCBulkImportRequest":
+        snapshot_ids = [(item.event_type, item.source_ref) for item in self.document_snapshots]
+        if len(snapshot_ids) != len(set(snapshot_ids)):
+            raise ValueError("Snapshot документа должен встречаться в пакете один раз")
+        event_ids = [
+            (item.event_type, item.source_ref, item.source_line_key)
+            for item in self.events
+            if item.event_type in {"sale", "customer_return"}
+        ]
+        if len(event_ids) != len(set(event_ids)):
+            raise ValueError("Строка документа должна встречаться в пакете один раз")
+        for snapshot in self.document_snapshots:
+            document_events = [
+                event
+                for event in self.events
+                if event.event_type == snapshot.event_type
+                and event.source_ref == snapshot.source_ref
+            ]
+            event_keys = {event.source_line_key for event in document_events}
+            if snapshot.posted and event_keys != set(snapshot.line_keys):
+                raise ValueError("events и line_keys полного snapshot документа не совпадают")
+            if snapshot.posted and any(not event.posted for event in document_events):
+                raise ValueError("Проведённый snapshot должен содержать только posted events")
+            if not snapshot.posted and document_events:
+                raise ValueError("Распроведённый документ не должен содержать events")
+        return self
 
 
 class SyncItemResult(BaseModel):
