@@ -51,6 +51,12 @@ INTERNAL_API_KEY_SECRET_FILE=/srv/dh-carpet/infra/secrets/internal_api_key
 
 API публикуется только на `127.0.0.1:8000`. Redis и Qdrant сейчас используются внутри Docker-сети без пароля, API key и TLS.
 
+Для интеграции с сервером 1С используется отдельный LAN-only reverse proxy Nginx:
+
+`Windows Server 1С 192.168.10.81 → http://192.168.10.82:8080 → http://127.0.0.1:8000`
+
+Nginx слушает порт `8080` только на LAN-интерфейсе `192.168.10.82` и разрешает запросы только от `192.168.10.81`; для остальных источников действует `deny all`. Публикация Docker backend остаётся `127.0.0.1:8000`. Каноническая конфигурация находится в `deploy/nginx/dh-carpet-lan.conf`, установка выполняется отслеживаемым Git скриптом `sudo /srv/dh-carpet/app/scripts/install-lan-proxy.sh`.
+
 Код поддерживает `INTERNAL_API_KEY` и `INTERNAL_API_KEY_FILE` для защиты `/api/internal/*`. В production ключ подключается как Docker secret; его значение не хранится в репозитории или env-файле.
 
 ## Целостность истории
