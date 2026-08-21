@@ -129,85 +129,100 @@ class BulkSyncService:
         self.session = session
 
     async def import_all(self, request: OneCBulkImportRequest) -> SyncRunResponse:
+        total_items = len(request.rugs) + len(request.events) + len(request.document_snapshots)
         run = SyncRun(
             source="1c",
             mode=request.mode,
             status="running",
-            total_items=len(request.rugs) + len(request.events) + len(request.document_snapshots),
+            total_items=total_items,
         )
         async with self.session.begin():
             self.session.add(run)
             await self.session.flush()
+            run_id = run.id
 
         results: list[SyncItemResult] = []
-        for rug in request.rugs:
-            try:
-                outcome = await RugSyncService(self.session).upsert(rug)
-                item = SyncItemResult(entity_type="rug", source_key=rug.barcode, status="succeeded", result=outcome.result)
-            except RugSyncConflictError as error:
-                item = SyncItemResult(entity_type="rug", source_key=rug.barcode, status="failed", error_code=error.code)
-            except Exception as error:
-                item = SyncItemResult(entity_type="rug", source_key=rug.barcode, status="failed", error_code=type(error).__name__)
-            await self._save_item(run.id, item)
-            results.append(item)
-
-        event_results: list[tuple[OneCEventImport, SyncItemResult]] = []
-        for event in sorted(request.events, key=lambda item: item.event_at):
-            key = f"{event.event_type}:{event.source_ref}:{event.source_line_key}"
-            try:
-                outcome, _ = await OneCEventSyncService(self.session).upsert(event)
-                item = SyncItemResult(entity_type=event.event_type, source_key=key, status="succeeded", result=outcome)
-            except Exception as error:
-                item = SyncItemResult(entity_type=event.event_type, source_key=key, status="failed", error_code=type(error).__name__)
-            await self._save_item(run.id, item)
-            results.append(item)
-            event_results.append((event, item))
-
-        failed_documents = {
-            (event.event_type, event.source_ref)
-            for event, result in event_results
-            if result.status == "failed"
-        }
-        for snapshot in request.document_snapshots:
-            key = f"{snapshot.event_type}:{snapshot.source_ref}"
-            if (snapshot.event_type, snapshot.source_ref) in failed_documents:
-                item = SyncItemResult(
-                    entity_type=f"{snapshot.event_type}_snapshot",
-                    source_key=key,
-                    status="failed",
-                    error_code="document_event_failed",
-                )
-            else:
+        try:
+            for rug in request.rugs:
                 try:
-                    outcome = await OneCDocumentSnapshotService(self.session).reconcile(snapshot)
-                    item = SyncItemResult(
-                        entity_type=f"{snapshot.event_type}_snapshot",
-                        source_key=key,
-                        status="succeeded",
-                        result=outcome,
-                    )
+                    outcome = await RugSyncService(self.session).upsert(rug)
+                    item = SyncItemResult(entity_type="rug", source_key=rug.barcode, status="succeeded", result=outcome.result)
+                except RugSyncConflictError as error:
+                    item = SyncItemResult(entity_type="rug", source_key=rug.barcode, status="failed", error_code=error.code)
                 except Exception as error:
+                    item = SyncItemResult(entity_type="rug", source_key=rug.barcode, status="failed", error_code=type(error).__name__)
+                await self._save_item(run_id, item)
+                results.append(item)
+
+            event_results: list[tuple[OneCEventImport, SyncItemResult]] = []
+            for event in sorted(request.events, key=lambda item: item.event_at):
+                key = f"{event.event_type}:{event.source_ref}:{event.source_line_key}"
+                try:
+                    outcome, _ = await OneCEventSyncService(self.session).upsert(event)
+                    item = SyncItemResult(entity_type=event.event_type, source_key=key, status="succeeded", result=outcome)
+                except Exception as error:
+                    item = SyncItemResult(entity_type=event.event_type, source_key=key, status="failed", error_code=type(error).__name__)
+                await self._save_item(run_id, item)
+                results.append(item)
+                event_results.append((event, item))
+
+            failed_documents = {
+                (event.event_type, event.source_ref)
+                for event, result in event_results
+                if result.status == "failed"
+            }
+            for snapshot in request.document_snapshots:
+                key = f"{snapshot.event_type}:{snapshot.source_ref}"
+                if (snapshot.event_type, snapshot.source_ref) in failed_documents:
                     item = SyncItemResult(
                         entity_type=f"{snapshot.event_type}_snapshot",
                         source_key=key,
                         status="failed",
-                        error_code=type(error).__name__,
+                        error_code="document_event_failed",
                     )
-            await self._save_item(run.id, item)
-            results.append(item)
+                else:
+                    try:
+                        outcome = await OneCDocumentSnapshotService(self.session).reconcile(snapshot)
+                        item = SyncItemResult(
+                            entity_type=f"{snapshot.event_type}_snapshot",
+                            source_key=key,
+                            status="succeeded",
+                            result=outcome,
+                        )
+                    except Exception as error:
+                        item = SyncItemResult(
+                            entity_type=f"{snapshot.event_type}_snapshot",
+                            source_key=key,
+                            status="failed",
+                            error_code=type(error).__name__,
+                        )
+                await self._save_item(run_id, item)
+                results.append(item)
 
-        succeeded = sum(item.status == "succeeded" for item in results)
-        failed = len(results) - succeeded
-        async with self.session.begin():
-            stored = await self.session.get(SyncRun, run.id, with_for_update=True)
-            assert stored is not None
-            stored.succeeded_items = succeeded
-            stored.failed_items = failed
-            stored.status = "completed" if failed == 0 else "completed_with_errors"
-            stored.finished_at = datetime.now(UTC)
+            succeeded = sum(item.status == "succeeded" for item in results)
+            failed = len(results) - succeeded
+            run_status = "completed" if failed == 0 else "completed_with_errors"
+            await self._finish_run(
+                run_id,
+                status=run_status,
+                succeeded_items=succeeded,
+                failed_items=failed,
+            )
+        except Exception as error:
+            await self.session.rollback()
+            succeeded = sum(item.status == "succeeded" for item in results)
+            await self._finish_run(
+                run_id,
+                status="failed",
+                succeeded_items=succeeded,
+                failed_items=total_items - succeeded,
+                error=type(error).__name__,
+            )
+            raise
+
         return SyncRunResponse(
-            run_id=run.id,
-            status="completed" if failed == 0 else "completed_with_errors",
+            run_id=run_id,
+            status=run_status,
             total_items=len(results),
             succeeded_items=succeeded,
             failed_items=failed,
@@ -224,6 +239,24 @@ class BulkSyncService:
                 result=result.result,
                 error=result.error_code,
             ))
+
+    async def _finish_run(
+        self,
+        run_id: uuid.UUID,
+        *,
+        status: str,
+        succeeded_items: int,
+        failed_items: int,
+        error: str | None = None,
+    ) -> None:
+        async with self.session.begin():
+            stored = await self.session.get(SyncRun, run_id, with_for_update=True)
+            assert stored is not None
+            stored.succeeded_items = succeeded_items
+            stored.failed_items = failed_items
+            stored.status = status
+            stored.error = error
+            stored.finished_at = datetime.now(UTC)
 
 
 class LalitaEventService:

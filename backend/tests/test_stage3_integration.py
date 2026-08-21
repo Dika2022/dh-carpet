@@ -17,7 +17,15 @@ from sqlalchemy.pool import NullPool
 from app.api.dependencies import get_request_settings, get_session
 from app.core.config import Settings
 from app.main import create_app
-from app.models.entities import ExternalPhotoFile, MediaItem, Rug, RugEvent, RugLocation
+from app.models.entities import (
+    ExternalPhotoFile,
+    MediaItem,
+    Rug,
+    RugEvent,
+    RugLocation,
+    SyncItem,
+    SyncRun,
+)
 from app.schemas.rugs import RugImportRequest
 from app.schemas.stage3 import LalitaEventConfirm, LalitaEventCreate, OneCBulkImportRequest, OneCEventImport
 from app.services.photo_archive import PhotoArchiveScanner, article_from_filename
@@ -228,6 +236,99 @@ async def test_bulk_sync_records_per_item_results(stage3_session: AsyncSession) 
     request = OneCBulkImportRequest(mode="initial", rugs=[RugImportRequest.model_validate(item) for item in payloads])
     result = await BulkSyncService(stage3_session).import_all(request)
     assert result.total_items == 3 and result.succeeded_items == 3 and result.failed_items == 0
+
+
+async def test_bulk_unknown_barcode_is_recorded_and_next_item_continues(
+    stage3_session: AsyncSession,
+    stage3_client: httpx.AsyncClient,
+) -> None:
+    _, known_payload = await create_rug(stage3_session)
+    marker = uuid.uuid4().hex
+    response = await stage3_client.post(
+        "/api/internal/1c/bulk",
+        headers={"X-Internal-API-Key": "test-internal-key"},
+        json={
+            "mode": "incremental",
+            "events": [
+                {
+                    "barcode": f"UNKNOWN-{marker}",
+                    "event_type": "sale",
+                    "event_at": "2026-08-21T10:00:00+03:00",
+                    "price": "1000",
+                    "qty": "1",
+                    "source_ref": f"missing-{marker}",
+                    "source_line_key": "line-1",
+                },
+                {
+                    "barcode": known_payload["barcode"],
+                    "event_type": "sale",
+                    "event_at": "2026-08-21T10:01:00+03:00",
+                    "price": "2000",
+                    "qty": "2",
+                    "source_ref": f"known-{marker}",
+                    "source_line_key": "line-1",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed_with_errors"
+    assert payload["succeeded_items"] == 1
+    assert payload["failed_items"] == 1
+    assert payload["items"][0]["error_code"] == "Stage3NotFoundError"
+    assert payload["items"][1]["status"] == "succeeded"
+
+    run_id = uuid.UUID(payload["run_id"])
+    run = await stage3_session.get(SyncRun, run_id)
+    assert run is not None
+    assert run.status == "completed_with_errors"
+    assert run.finished_at is not None
+    items = list(
+        (
+            await stage3_session.scalars(
+                select(SyncItem).where(SyncItem.sync_run_id == run_id)
+            )
+        ).all()
+    )
+    assert {item.status: item.error for item in items} == {
+        "failed": "Stage3NotFoundError",
+        "succeeded": None,
+    }
+    assert await row_count(
+        stage3_session,
+        RugEvent,
+        RugEvent.source_ref == f"known-{marker}",
+    ) == 1
+
+
+async def test_bulk_unhandled_error_finalizes_run(
+    stage3_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = BulkSyncService(stage3_session)
+
+    async def fail_to_save_item(run_id: uuid.UUID, result: object) -> None:
+        raise RuntimeError("forced test failure")
+
+    monkeypatch.setattr(service, "_save_item", fail_to_save_item)
+    request = OneCBulkImportRequest.model_validate(
+        {"mode": "initial", "rugs": [rug_payload()]}
+    )
+
+    with pytest.raises(RuntimeError, match="forced test failure"):
+        await service.import_all(request)
+
+    run = await stage3_session.scalar(
+        select(SyncRun).order_by(SyncRun.started_at.desc()).limit(1)
+    )
+    assert run is not None
+    assert run.status == "failed"
+    assert run.finished_at is not None
+    assert run.succeeded_items == 0
+    assert run.failed_items == 1
+    assert run.error == "RuntimeError"
 
 
 async def test_lalita_discount_lifecycle_and_durations(stage3_session: AsyncSession) -> None:
